@@ -58,11 +58,12 @@ Passo 4: Configuração Final
     (Opcional) Configure o MQTT para integração com o Home Assistant ou outros sistemas.
 
 Configuração de Hardware
-
 Em breve, mais detalhes sobre a montagem física do projeto serão adicionados aqui.
+
 Integração com Home Assistant
-
 Em breve, instruções específicas para integração com o Home Assistant serão incluídas.
-Contribuições
 
+
+
+Contribuições
 Sinta-se à vontade para abrir issues ou enviar pull requests com melhorias, correções ou sugestões! Este é um projeto em desenvolvimento, e toda ajuda é bem-vinda.
