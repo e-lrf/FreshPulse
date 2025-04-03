@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FreshPulse - Aromatizante de ambiente automático</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-family: Arial, sans-serif;
+    }
+    body {
+      background-color: #1a1a1a;
+      color: #e0e0e0;
+      display: flex;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+    .sidebar {
+      width: 250px;
+      background-color: #2a2a2a;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      position: fixed;
+      height: 100%;
+      transition: transform 0.3s ease;
+      z-index: 1000;
+    }
+    .sidebar a {
+      color: #e0e0e0;
+      text-decoration: none;
+      padding: 10px;
+      border-radius: 5px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .sidebar a:hover {
+      background-color: #3a3a3a;
+    }
+    .sidebar a.active {
+      background-color: #4CAF50;
+    }
+    .content {
+      flex: 1;
+      padding: 20px;
+      margin-left: 250px;
+      transition: margin-left 0.3s ease;
+    }
+    .header {
+      background-color: #2a2a3a;
+      padding: 10px 20px;
+      border-radius: 5px;
+      margin-bottom: 20px;
+    }
+    .header h1 {
+      font-size: 1.5em;
+    }
+    .status-box {
+      background-color: #2a2a3a;
+      padding: 20px;
+      border-radius: 5px;
+      margin-bottom: 20px;
+    }
+    .status-box h2 {
+      font-size: 1.2em;
+      margin-bottom: 10px;
+    }
+    .status-box p {
+      margin: 5px 0;
+      font-size: 0.9em;
+    }
+    .status-box .label {
+      display: inline-block;
+      width: 200px;
+    }
+    .status-box .value {
+      color: #4CAF50;
+    }
+    .status-connected {
+      color: #4CAF50;
+    }
+    .status-disconnected {
+      color: #ff4444;
+    }
+    .status-medium {
+      color: #ffeb3b;
+    }
+    .menu-toggle {
+      display: none;
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      background-color: #4CAF50;
+      color: white;
+      padding: 10px;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      z-index: 1100;
+    }
+  /* Adicione este novo contêiner para os botões */
+  .button-container {
+    margin-top: auto; /* Empurra o contêiner para o fundo do sidebar */
+    display: flex;
+    flex-direction: column;
+    gap: 10px; /* Espaço entre os botões */
+  }
+
+  /* Ajuste o spray-button */
+  .button {
+    background-color: #4CAF50; /* Cor padrão */
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    text-align: center;
+    display: inline-block;
+    text-decoration: none;
+    transition: background-color 0.2s ease, transform 0.1s ease; /* Transição suave */
+  }
+  .button:hover {
+    background-color: #45a049;
+  }
+  .button:active {
+    background-color: #3d8b40;
+    transform: scale(0.98);
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.3);
+  }
+  .button--restart {
+    background-color: #ff4444;
+  }
+  .button--restart:hover {
+    background-color: #cc0000;
+  }
+  .button--restart:active {
+    background-color: #b32d2d; /* Cor mais escura para o estado ativo */
+  }
+  
+  .info-text {
+  font-style: italic;
+  color: #b0b0b0;
+  font-size: 0.8em;
+}
+
+    /* Responsividade para telas menores */
+    @media (max-width: 768px) {
+      .sidebar {
+        transform: translateX(-100%);
+      }
+      .sidebar.active {
+        transform: translateX(0);
+      }
+      .content {
+        margin-left: 0;
+      }
+      .menu-toggle {
+        display: block;
+      }
+      .header h1 {
+        font-size: 1.2em;
+      }
+      .status-box {
+        padding: 15px;
+      }
+      .status-box p {
+        font-size: 0.8em;
+      }
+      .button {
+        padding: 8px 16px;
+        font-size: 0.9em;
+        width: 100%; /* Já aplica aqui para evitar redundância */
+      }
+    }
+
+    @media (max-width: 480px) {
+      .status-box .label {
+        display: block;
+        width: 100%;
+        margin-bottom: 5px;
+      }
+      .status-box .value {
+        display: block;
+        margin-left: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <button class="menu-toggle" onclick="toggleMenu()">☰</button>
+  <div class="sidebar" id="sidebar">
+    <a href="/" class="active"><span>📊</span> Painel</a>
+    <a href="/agendamento.html"><span>⏰</span> Agendamento</a>
+    <a href="/ntp.html"><span>⏳</span> NTP</a>
+    <a href="/wifi.html"><span>📶</span> Redes</a>
+    <a href="/mqtt.html"><span>📡</span> MQTT</a>
+  <div class="button-container">
+    <button class="button" onclick="activateSpray()">Spray</button>
+    <button class="button button--restart" onclick="restartESP()">Reiniciar</button>
+  </div>
+</div>
+  </div>
+  <div class="content">
+    <div class="header">
+      <h1>FreshPulse - Aromatizante de ambiente automático</h1>
+    </div>
+    <div class="status-box">
+      <h2>Estado Geral</h2>
+      <p><span class="label">Contador de Sprays:</span> <span id="counterValue">Carregando...</span></p>
+      <p><span class="label">Status NTP:</span> <span class="value" id="ntpStatus">Carregando...</span></p>
+      <p><span class="label">Status MQTT:</span> <span class="value" id="mqttStatus">Carregando...</span></p>
+      <p><span class="label">Agendamento:</span> <span class="value" id="scheduleStatus">Carregando...</span></p>
+    </div>
+    <div class="status-box">
+      <h2>Dados do Wi-Fi</h2>
+      <p><span class="label">Rede Conectada:</span> <span class="value" id="wifiSsid">Carregando...</span></p>
+      <p><span class="label">Intensidade do Sinal:</span> <span class="value" id="wifiSignalStrength">Carregando...</span></p>
+      <p><span class="label">Endereço IP:</span> <span class="value" id="ipAddress">Carregando...</span></p>
+      <p><span class="label">Hostname:</span> <span class="value" id="hostname">Carregando...</span></p>
+    </div>
+    <div class="status-box">
+      <h2>Informações de Hardware</h2>
+      <p><span class="label">Modelo do Chip:</span> <span class="value" id="chipModel">Carregando...</span></p>
+      <p><span class="label">Frequência da CPU:</span> <span class="value" id="cpuFreq">Carregando...</span> MHz</p>
+      <p><span class="label">Tempo Ligado:</span> <span class="value" id="uptime">Carregando...</span></p>
+    </div>  
+  </div>
+
+  <script>
+    // Função para abrir/fechar o menu lateral em telas pequenas
+    function toggleMenu() {
+      const sidebar = document.getElementById("sidebar");
+      sidebar.classList.toggle("active");
+    }
+
+    // Função para atualizar o contador na interface
+    function updateCounter() {
+      fetch('/getCounter')
+        .then(response => response.json())
+        .then(data => {
+          document.getElementById('counterValue').textContent = data.counter;
+        })
+        .catch(error => console.error('Erro ao atualizar o contador:', error));
+    }
+
+    // Função para acionar o spray
+    function activateSpray() {
+      const button = document.querySelector('button');
+      button.disabled = true;
+      button.innerText = 'Acionando...';
+      fetch('/sprayButton')
+        .then(response => response.text())
+        .then(data => {
+          updateCounter();
+          button.style.backgroundColor = '#66bb6a'; // Verde claro para sucesso
+          setTimeout(() => {
+            button.style.backgroundColor = '#4CAF50'; // Volta à cor original
+            button.disabled = false;
+            button.innerText = 'Spray';
+          }, 1000);
+        })
+        .catch(error => {
+          console.error('Erro ao acionar Spray:', error);
+          button.style.backgroundColor = '#d32f2f'; // Vermelho para erro
+          setTimeout(() => {
+            button.style.backgroundColor = '#4CAF50'; // Volta à cor original
+            button.disabled = false;
+            button.innerText = 'Spray';
+          }, 1000);
+        });
+    }
+
+    // Função para atualizar as informações de hardware
+    function updateHardwareInfo() {
+      fetch('/getHardwareInfo')
+        .then(response => response.json())
+        .then(data => {
+          document.getElementById('chipModel').innerText = data.chipModel;
+          document.getElementById('cpuFreq').innerText = data.cpuFreq;
+          document.getElementById('uptime').innerText = data.uptime;
+        })
+        .catch(error => console.error('Erro ao atualizar informações de hardware:', error));
+    }
+
+    // Função para atualizar o status do NTP
+    function updateNtpStatus(data) {
+      const ntpStatus = document.getElementById('ntpStatus');
+      if (data.connected) {
+        ntpStatus.textContent = `Ativado - ${data.datetime}`;
+        ntpStatus.className = "value status-connected";
+      } else {
+        ntpStatus.textContent = "Desativado";
+        ntpStatus.className = "value status-disconnected";
+      }
+    }
+
+    // Função para verificar o status do NTP
+    function checkNtpStatus() {
+      fetch('/ntpStatus')
+        .then(response => response.json())
+        .then(data => {
+          updateNtpStatus(data);
+        })
+        .catch(error => {
+          console.error('Erro ao verificar o status do NTP:', error);
+          updateNtpStatus({ connected: false });
+        });
+    }
+
+    // Função para atualizar o status do MQTT
+    function updateMqttStatus(data) {
+      const mqttStatus = document.getElementById('mqttStatus');
+      if (data.connected) {
+        mqttStatus.textContent = "Conectado";
+        mqttStatus.className = "value status-connected";
+      } else {
+        mqttStatus.textContent = "Desconectado";
+        mqttStatus.className = "value status-disconnected";
+      }
+    }
+
+    // Função para verificar o status do MQTT
+    function checkMqttStatus() {
+      fetch('/mqttStatus')
+        .then(response => response.json())
+        .then(data => {
+          updateMqttStatus(data);
+        })
+        .catch(error => {
+          console.error('Erro ao verificar o status do MQTT:', error);
+          updateMqttStatus({ connected: false });
+        });
+    }
+
+    // Função para carregar o status do agendamento
+    function loadScheduleStatus() {
+      fetch('/getScheduleStatus')
+        .then(response => response.json())
+        .then(data => {
+          const scheduleStatus = document.getElementById('scheduleStatus');
+          if (data.enabled) {
+            scheduleStatus.textContent = `Ativo (${data.startTime} - ${data.endTime})`;
+            scheduleStatus.className = "value status-connected";
+          } else {
+            scheduleStatus.textContent = "Desativado";
+            scheduleStatus.className = "value status-disconnected";
+          }
+        })
+        .catch(error => {
+          console.error('Erro ao carregar status do agendamento:', error);
+          const scheduleStatus = document.getElementById('scheduleStatus');
+          scheduleStatus.textContent = "Desativado";
+          scheduleStatus.className = "value status-disconnected";
+        });
+    }
+
+    // Função para carregar as informações do Wi-Fi
+    function loadWifiInfo() {
+      fetch('/getWifiInfo')
+        .then(response => response.json())
+        .then(data => {
+          document.getElementById('wifiSsid').textContent = data.ssid;
+          document.getElementById('wifiSignalStrength').textContent = data.signalStrength;
+          document.getElementById('wifiSignalStrength').className = "value " + (data.signalStrength === "Bom" ? "status-connected" : data.signalStrength === "Médio" ? "status-medium" : "status-disconnected");
+          document.getElementById('ipAddress').textContent = data.ip;
+          document.getElementById('hostname').textContent = data.hostname;
+        })
+        .catch(error => {
+          console.error('Erro ao carregar informações do Wi-Fi:', error);
+          document.getElementById('wifiSsid').textContent = "Desconhecido";
+          document.getElementById('wifiSignalStrength').textContent = "Desconhecido";
+          document.getElementById('wifiSignalStrength').className = "value status-disconnected";
+          document.getElementById('ipAddress').textContent = "Desconhecido";
+          document.getElementById('hostname').textContent = "Desconhecido";
+        });
+    }
+
+    // Função para reiniciar o ESP
+    function restartESP() {
+      if (confirm('Tem certeza que deseja reiniciar o ESP?')) {
+        fetch('/restart')
+          .then(response => response.text())
+          .then(data => {
+            alert(data);
+            setTimeout(() => {
+              window.location.reload();
+            }, 10000); // Aguarda 10 segundos antes de recarregar a página
+          })
+          .catch(error => console.error('Erro ao reiniciar o ESP:', error));
+      }
+    }
+
+    // Carrega os status iniciais e configura atualizações periódicas
+    window.onload = () => {
+      updateCounter(); // Carrega o contador inicialmente
+      setInterval(updateCounter, 5000); // Atualiza o contador a cada 5 segundos
+      checkMqttStatus();
+      setInterval(checkMqttStatus, 5000); // Verifica o status do MQTT a cada 5 segundos
+      checkNtpStatus();
+      setInterval(checkNtpStatus, 5000); // Verifica o status do NTP a cada 5 segundos
+      loadScheduleStatus();
+      setInterval(loadScheduleStatus, 5000); // Verifica o status do agendamento a cada 5 segundos
+      loadWifiInfo();
+      setInterval(loadWifiInfo, 5000); // Verifica as informações do Wi-Fi a cada 5 segundos
+      updateHardwareInfo();
+      setInterval(updateHardwareInfo, 5000);
+    };
+  </script>
+</body>
+</html>
+
