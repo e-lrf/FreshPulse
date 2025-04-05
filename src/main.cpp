@@ -477,10 +477,10 @@ class NTPManager {
         // Já conseguiu a primeira sincronização
         if (NTP.getLastNTPSync() > 0) {
           // Última sincronização foi bem-sucedida: espera 24 horas
-          interval = 24UL * 60UL * 60UL * 1000UL;  // 24 horas em milissegundos
+          interval = 86400000UL;  // 24 horas em milissegundos
         } else {
           // Falhou na última tentativa após a primeira sincronização: tenta a cada 10 minutos
-          interval = 10UL * 60UL * 1000UL;  // 10 minutos em milissegundos
+          interval = 6000000UL;  // 10 minutos em milissegundos
         }
       }
   
@@ -529,387 +529,393 @@ class NTPManager {
     }
   };
 
-class MQTTManager {
-private:
-  bool enabled;
-  String host;
-  int port;
-  String topic;
-  String user;
-  String password;
-  const char* configFile = "/mqtt.json";
-  
-  WiFiClient espClient;
-  PubSubClient client;
-  char msg[MSG_BUFFER_SIZE];
-  String topicContador;
-  String topicNtpStatus;
-  String topicUltimaAtivacao;
-  String topicScheduleEnabled;
-  String topicScheduleInterval;
-  String topicScheduleStartTime;
-  String topicScheduleEndTime;
-  String topicSpraySet;
-  String topicNtpSetEnabled;
-  String topicScheduleSetEnabled;
-  String topicScheduleSetInterval;
-  String topicScheduleSetStartTime;
-  String topicScheduleSetEndTime;
-  ScheduleConfig* schedule;
-  NTPManager* ntp;
-  unsigned long lastReconnectAttempt = 0;
-  int lastSprayCount = -1;
-  String lastTimestamp = "";
-  String hostnameSubtopic;
-  bool sprayMqttEnabled = false;
-  bool lastRelayState = false;
-
-  void publish(const char* topic, const String& message) {
-    if (enabled && client.connected()) {
-      client.publish(topic, message.c_str());
-      Serial.println("Publicado em " + String(topic) + ": " + message);
-    } else {
-      Serial.println("Falha ao publicar em " + String(topic) + ": MQTT não conectado");
-    }
-  }
-
-  void publishInitialState(SprayController& sprayCtrl, NTPManager& ntp) {
-    if (!client.connected()) {
-      Serial.println("MQTT não conectado, abortando publicação inicial");
-      return;
-    }
-  
-    Serial.println("Publicando estado inicial no MQTT");
-  
-    // Publica o contador
-    int currentCount = sprayCtrl.getSprayCount();
-    publish(topicContador.c_str(), String(currentCount));
-    lastSprayCount = currentCount;
-  
-    publish(topicNtpStatus.c_str(), ntp.isNtpActive() ? "true" : "false");
-  
-    // Publica a última ativação do spray
-    String currentTimestamp = sprayCtrl.getSprayTimestamp();
-    publish(topicUltimaAtivacao.c_str(), currentTimestamp);
-    lastTimestamp = currentTimestamp;
-  
-    // Publica o status do agendamento
-    publishScheduleStatus();
-  
-    // Publica o estado do spray via MQTT
-    publish(topicSpraySet.c_str(), sprayMqttEnabled ? "true" : "false");
-  }
-
-public:
-  MQTTManager() : client(espClient), enabled(false), host(""), port(1883), topic("FreshPulse/"), user(""), password("") {
-    loadConfig();
-  }
-
-  void setSchedule(ScheduleConfig* sched) { schedule = sched; }
-  void setNtp(NTPManager* n) { ntp = n; }
-  void setHostnameSubtopic(String hostname) {
-    hostnameSubtopic = hostname;
-    updateTopics();
-  }
-
-  void loadConfig() {
-    File file = LittleFS.open(configFile, "r");
-    if (!file) {
-      Serial.println("Arquivo de configuração MQTT não encontrado. Criando novo...");
-      saveConfig();
-      return;
-    }
-
-    DynamicJsonDocument doc(512);
-    DeserializationError error = deserializeJson(doc, file);
-    if (error) {
-      Serial.println("Erro ao ler arquivo de configuração MQTT: " + String(error.c_str()));
-      file.close();
-      return;
-    }
-
-    enabled = doc["enabled"].as<bool>();
-    host = doc["host"].as<String>();
-    port = doc["port"].as<int>();
-    topic = doc["topic"].as<String>();
-    user = doc["user"].as<String>();
-    password = doc["password"].as<String>();
-    file.close();
-    updateTopics();
-  }
-
-  void saveConfig() {
-    File file = LittleFS.open(configFile, "w");
-    if (!file) {
-      Serial.println("Erro ao abrir arquivo de configuração MQTT para escrita");
-      return;
-    }
-
-    DynamicJsonDocument doc(512);
-    doc["enabled"] = enabled;
-    doc["host"] = host;
-    doc["port"] = port;
-    doc["topic"] = topic;
-    doc["user"] = user;
-    doc["password"] = password;
-
-    if (serializeJson(doc, file) == 0) {
-      Serial.println("Erro ao escrever arquivo de configuração MQTT");
-    }
-    file.close();
-  }
-
-  void updateConfig(bool newEnabled, String newHost, int newPort, String newTopic, String newUser, String newPassword) {
-    enabled = newEnabled;
-    host = newHost;
-    port = newPort;
-    topic = newTopic;
-    user = newUser;
-    password = newPassword;
-    saveConfig();
-    updateTopics();
-  }
-
-  void replaceMQTTPlaceholders(String& html) {
-    html.replace("{{MQTT_ATIVO}}", enabled ? "checked" : "");
-    html.replace("{{MQTT_HOST}}", host);
-    html.replace("{{MQTT_PORTA}}", String(port));
-    html.replace("{{MQTT_TOPICO}}", topic);
-    html.replace("{{MQTT_USUARIO}}", user);
-    html.replace("{{MQTT_SENHA}}", password);
-  }
-
-  void handleSaveMQTT(ESP8266WebServer& server) {
-    bool newEnabled = server.arg("mqtt_ativo") == "on";
-    String newHost = server.arg("mqtt_host");
-    int newPort = server.arg("mqtt_porta").toInt();
-    String newTopic = server.arg("mqtt_topico");
-    String newUser = server.arg("mqtt_usuario");
-    String newPassword = server.arg("mqtt_senha");
-
-    updateConfig(newEnabled, newHost, newPort, newTopic, newUser, newPassword);
-    String response = "Configuração MQTT salva com sucesso! Reiniciando em 10 segundos...";
-    server.send(200, "text/plain", response);
-    unsigned long restartStart = millis();
-    while (millis() - restartStart < 10000) { ESP.wdtFeed(); }
-    ESP.restart();
-  }
-
-  void handleMqttStatus(ESP8266WebServer& server) {
-    DynamicJsonDocument doc(512);
-    doc["enabled"] = enabled;
-    doc["connected"] = enabled && client.connected(); // Verifica se está habilitado E conectado
-    doc["host"] = host;
-    doc["topic"] = topic;
-    String json;
-    serializeJson(doc, json);
-    server.send(200, "application/json", json);
-  }
-
-  void setupMQTT(SprayController& sprayCtrl, NTPManager& ntpMgr, ESP8266WebServer& server) {
-    if (!enabled) return;
-
-    ntp = &ntpMgr;
-    client.setServer(host.c_str(), port);
-    client.setKeepAlive(10);
-    client.setCallback([this, &sprayCtrl, &server](char* topic, byte* payload, unsigned int length) {
-      callback(topic, payload, length, sprayCtrl, server);
-    });
-
-    int attempts = 0;
-    while (!client.connected() && attempts < 5) {
-      if (client.connect("ESP8266Client", user.c_str(), password.c_str())) {
-        Serial.println("MQTT conectado com sucesso! Sub-tópico: " + hostnameSubtopic);
-        client.subscribe(topicSpraySet.c_str());
-        client.subscribe(topicNtpSetEnabled.c_str());
-        client.subscribe(topicScheduleSetEnabled.c_str());
-        client.subscribe(topicScheduleSetInterval.c_str());
-        client.subscribe(topicScheduleSetStartTime.c_str());
-        client.subscribe(topicScheduleSetEndTime.c_str());
-        publishInitialState(sprayCtrl, ntpMgr);
-      } else {
-        Serial.println("Falha ao conectar ao MQTT, tentativa " + String(attempts + 1) + " de 5");
-        delay(1000);
-        attempts++;
+  class MQTTManager {
+    private:
+      bool enabled;
+      String host;
+      int port;
+      String topic;
+      String user;
+      String password;
+      const char* configFile = "/mqtt.json";
+      
+      WiFiClient espClient;
+      PubSubClient client;
+      char msg[MSG_BUFFER_SIZE];
+      String topicContador;
+      String topicNtpStatus;
+      String topicUltimaAtivacao;
+      String topicScheduleEnabled;
+      String topicScheduleInterval;
+      String topicScheduleStartTime;
+      String topicScheduleEndTime;
+      String topicSpraySet;
+      String topicNtpSetEnabled;
+      String topicScheduleSetEnabled;
+      String topicScheduleSetInterval;
+      String topicScheduleSetStartTime;
+      String topicScheduleSetEndTime;
+      ScheduleConfig* schedule;
+      NTPManager* ntp;
+      unsigned long lastReconnectAttempt = 0;
+      int lastSprayCount = -1;
+      String lastTimestamp = "";
+      String hostnameSubtopic;
+      bool sprayMqttEnabled = false;
+      bool lastRelayState = false;
+      bool hasConnectedBefore = false;
+      int initialConnectAttempts = 0;
+    
+      void publish(const char* topic, const String& message) {
+        if (enabled && client.connected()) {
+          client.publish(topic, message.c_str());
+          Serial.println("Publicado em " + String(topic) + ": " + message);
+        } else {
+          Serial.println("Falha ao publicar em " + String(topic) + ": MQTT não conectado (enabled=" + String(enabled) + ", connected=" + String(client.connected()) + ")");
+        }
       }
-    }
-
-    if (!client.connected()) {
-      Serial.println("Falha ao conectar ao MQTT após 5 tentativas. Continuando sem MQTT.");
-      enabled = false;
-      saveConfig();
-    }
-  }
-
-  bool reconnect() {
-    if (client.connected()) return true;
-    unsigned long now = millis();
-    if (now - lastReconnectAttempt < MQTT_RECONNECT_INTERVAL) return false;
-    lastReconnectAttempt = now;
-
-    if (client.connect("ESP8266Client", user.c_str(), password.c_str())) {
-      client.subscribe(topicSpraySet.c_str());
-      client.subscribe(topicNtpSetEnabled.c_str());
-      client.subscribe(topicScheduleSetEnabled.c_str());
-      client.subscribe(topicScheduleSetInterval.c_str());
-      client.subscribe(topicScheduleSetStartTime.c_str());
-      client.subscribe(topicScheduleSetEndTime.c_str());
-      Serial.println("MQTT reconectado com sucesso! Sub-tópico: " + hostnameSubtopic);
-      return true;
-    } else {
-      Serial.println("Tentativa de reconexão ao MQTT falhou.");
-      if ((millis() - lastReconnectAttempt) / MQTT_RECONNECT_INTERVAL >= 3) {
-        enabled = false;
+    
+      void publishInitialState(SprayController& sprayCtrl, NTPManager& ntp) {
+        if (!client.connected()) {
+          Serial.println("MQTT não conectado, abortando publicação inicial");
+          return;
+        }
+      
+        Serial.println("Publicando estado inicial no MQTT");
+        publish(topicContador.c_str(), String(sprayCtrl.getSprayCount()));
+        lastSprayCount = sprayCtrl.getSprayCount();
+        publish(topicNtpStatus.c_str(), ntp.isNtpActive() ? "true" : "false");
+        publish(topicUltimaAtivacao.c_str(), sprayCtrl.getSprayTimestamp());
+        lastTimestamp = sprayCtrl.getSprayTimestamp();
+        publishScheduleStatus();
+        publish(topicSpraySet.c_str(), sprayMqttEnabled ? "true" : "false");
+      }
+    
+    public:
+      MQTTManager() : client(espClient), enabled(false), host(""), port(1883), topic("FreshPulse/"), user(""), password("") {
+        loadConfig();
+      }
+    
+      void setSchedule(ScheduleConfig* sched) { schedule = sched; }
+      void setNtp(NTPManager* n) { ntp = n; }
+      void setHostnameSubtopic(String hostname) {
+        hostnameSubtopic = hostname;
+        updateTopics();
+      }
+    
+      void loadConfig() {
+        File file = LittleFS.open(configFile, "r");
+        if (!file) {
+          Serial.println("Arquivo de configuração MQTT não encontrado. Criando novo...");
+          saveConfig();
+          return;
+        }
+    
+        DynamicJsonDocument doc(512);
+        DeserializationError error = deserializeJson(doc, file);
+        if (error) {
+          Serial.println("Erro ao ler arquivo de configuração MQTT: " + String(error.c_str()));
+          file.close();
+          return;
+        }
+    
+        enabled = doc["enabled"].as<bool>();
+        host = doc["host"].as<String>();
+        port = doc["port"].as<int>();
+        topic = doc["topic"].as<String>();
+        user = doc["user"].as<String>();
+        password = doc["password"].as<String>();
+        file.close();
+        updateTopics();
+        Serial.println("Configuração MQTT carregada: enabled=" + String(enabled) + ", host=" + host + ", port=" + String(port));
+      }
+    
+      void saveConfig() {
+        File file = LittleFS.open(configFile, "w");
+        if (!file) {
+          Serial.println("Erro ao abrir arquivo de configuração MQTT para escrita");
+          return;
+        }
+    
+        DynamicJsonDocument doc(512);
+        doc["enabled"] = enabled;
+        doc["host"] = host;
+        doc["port"] = port;
+        doc["topic"] = topic;
+        doc["user"] = user;
+        doc["password"] = password;
+    
+        if (serializeJson(doc, file) == 0) {
+          Serial.println("Erro ao escrever arquivo de configuração MQTT");
+        }
+        file.close();
+        Serial.println("Configuração MQTT salva: enabled=" + String(enabled));
+      }
+    
+      void updateConfig(bool newEnabled, String newHost, int newPort, String newTopic, String newUser, String newPassword) {
+        enabled = newEnabled;
+        host = newHost;
+        port = newPort;
+        topic = newTopic;
+        user = newUser;
+        password = newPassword;
         saveConfig();
-        //ESP.restart();
+        updateTopics();
+        initialConnectAttempts = 0;
+        hasConnectedBefore = false;
+        Serial.println("Configuração MQTT atualizada: enabled=" + String(enabled) + ", host=" + host);
       }
-      return false;
-    }
-  }
-
-  void loop(SprayController& sprayCtrl) {
-    if (!enabled) return;
-    if (!client.connected()) reconnect();
-    client.loop();
-  
-    static unsigned long lastPeriodicPublish = 0;
-    static unsigned long lastEventPublish = 0;
-    unsigned long now = millis();
-  
-    // Publicação periódica a cada 1 minuto (60000ms)
-    if (now - lastPeriodicPublish >= 60000) {
-      lastPeriodicPublish = now;
-      Serial.println("Publicação periódica de todos os tópicos MQTT");
-  
-      // Publica o contador
-      int currentCount = sprayCtrl.getSprayCount();
-      publish(topicContador.c_str(), String(currentCount));
-      lastSprayCount = currentCount;
-  
-      // Publica o status do NTP
-      publish(topicNtpStatus.c_str(), ntp->isNtpActive() ? "true" : "false");
-  
-      // Publica a última ativação do spray
-      String currentTimestamp = sprayCtrl.getSprayTimestamp();
-      publish(topicUltimaAtivacao.c_str(), currentTimestamp);
-      lastTimestamp = currentTimestamp;
-  
-      // Publica o status do agendamento
-      publishScheduleStatus();
-  
-      // Publica o estado do spray via MQTT
-      publish(topicSpraySet.c_str(), sprayMqttEnabled ? "true" : "false");
-    }
-  
-    // Publicação imediata para eventos (a cada 500ms para evitar sobrecarga)
-    if (now - lastEventPublish >= 500) {
-      lastEventPublish = now;
-  
-      // Verifica mudanças no contador
-      int currentCount = sprayCtrl.getSprayCount();
-      if (currentCount != lastSprayCount) {
-        publish(topicContador.c_str(), String(currentCount));
-        lastSprayCount = currentCount;
+    
+      void replaceMQTTPlaceholders(String& html) {
+        html.replace("{{MQTT_ATIVO}}", enabled ? "checked" : "");
+        html.replace("{{MQTT_HOST}}", host);
+        html.replace("{{MQTT_PORTA}}", String(port));
+        html.replace("{{MQTT_TOPICO}}", topic);
+        html.replace("{{MQTT_USUARIO}}", user);
+        html.replace("{{MQTT_SENHA}}", password);
       }
-  
-      // Verifica mudanças na última ativação
-      String currentTimestamp = sprayCtrl.getSprayTimestamp();
-      if (currentTimestamp != lastTimestamp) {
-        publish(topicUltimaAtivacao.c_str(), currentTimestamp);
-        lastTimestamp = currentTimestamp;
+    
+      void handleSaveMQTT(ESP8266WebServer& server) {
+        bool newEnabled = server.arg("mqtt_ativo") == "on";
+        String newHost = server.arg("mqtt_host");
+        int newPort = server.arg("mqtt_porta").toInt();
+        String newTopic = server.arg("mqtt_topico");
+        String newUser = server.arg("mqtt_usuario");
+        String newPassword = server.arg("mqtt_senha");
+    
+        updateConfig(newEnabled, newHost, newPort, newTopic, newUser, newPassword);
+        String response = "Configuração MQTT salva com sucesso! Reiniciando em 10 segundos...";
+        server.send(200, "text/plain", response);
+        unsigned long restartStart = millis();
+        while (millis() - restartStart < 10000) { ESP.wdtFeed(); }
+        ESP.restart();
       }
-  
-      // Verifica mudanças no estado do spray via MQTT
-      bool currentRelayState = sprayCtrl.isRelayActive();
-      if (lastRelayState && !currentRelayState) {
-        sprayMqttEnabled = false;
-        publish(topicSpraySet.c_str(), "false");
-        Serial.println("Controle do spray via MQTT desativado após ativação");
+    
+      void handleMqttStatus(ESP8266WebServer& server) {
+        DynamicJsonDocument doc(512);
+        doc["enabled"] = enabled;
+        doc["connected"] = enabled && client.connected();
+        doc["host"] = host;
+        doc["topic"] = topic;
+        String json;
+        serializeJson(doc, json);
+        server.send(200, "application/json", json);
       }
-      lastRelayState = currentRelayState;
-    }
-  }
-
-  void callback(char* topic, byte* payload, unsigned int length, SprayController& sprayCtrl, ESP8266WebServer& server) {
-    String message = String((char*)payload).substring(0, length);
-    String vTopic = topic;
-    Serial.println("Mensagem recebida em " + vTopic + ": " + message);
-
-    if (vTopic == topicSpraySet) {
-      bool newState = (message == "true");
-      if (newState && !sprayMqttEnabled) {
-        sprayMqttEnabled = true;
-        sprayCtrl.shortPress();
-        publish(topicSpraySet.c_str(), "true");
-        Serial.println("Spray ativado via MQTT");
-      } else if (!newState && sprayMqttEnabled) {
-        sprayMqttEnabled = false;
-        publish(topicSpraySet.c_str(), "false");
-        Serial.println("Spray desativado via MQTT");
+    
+      void setupMQTT(SprayController& sprayCtrl, NTPManager& ntpMgr, ESP8266WebServer& server) {
+        if (!enabled) {
+          Serial.println("MQTT desativado nas configurações.");
+          return;
+        }
+    
+        ntp = &ntpMgr;
+        client.setServer(host.c_str(), port);
+        client.setKeepAlive(60);
+        client.setCallback([this, &sprayCtrl, &server](char* topic, byte* payload, unsigned int length) {
+          callback(topic, payload, length, sprayCtrl, server);
+        });
+    
+        initialConnectAttempts = 0;
+        while (!client.connected() && initialConnectAttempts < 5) {
+          Serial.println("Tentando conectar ao MQTT... Tentativa " + String(initialConnectAttempts + 1) + " de 5");
+          if (client.connect(hostnameSubtopic.c_str(), user.c_str(), password.c_str())) {
+            Serial.println("MQTT conectado com sucesso! Sub-tópico: " + hostnameSubtopic);
+            client.subscribe(topicSpraySet.c_str());
+            client.subscribe(topicNtpSetEnabled.c_str());
+            client.subscribe(topicScheduleSetEnabled.c_str());
+            client.subscribe(topicScheduleSetInterval.c_str());
+            client.subscribe(topicScheduleSetStartTime.c_str());
+            client.subscribe(topicScheduleSetEndTime.c_str());
+            hasConnectedBefore = true;
+            publishInitialState(sprayCtrl, ntpMgr);
+            break;
+          } else {
+            Serial.println("Falha ao conectar ao MQTT. Estado: " + String(client.state()));
+            delay(1000);
+            initialConnectAttempts++;
+          }
+        }
+    
+        if (!client.connected()) {
+          Serial.println("Falha ao conectar ao MQTT após 5 tentativas. Desativando MQTT.");
+          enabled = false;
+          saveConfig();
+        }
       }
-    } else if (vTopic == topicNtpSetEnabled) {
-      String newState = (message == "true") ? "1" : "0";
-      if (newState != ntp->getNtpEnabled()) {
-        publish(topicNtpStatus.c_str(), ntp->isNtpActive() ? "true" : "false");
-        ntp->setNtpEnabled(newState);
+    
+      bool reconnect() {
+        if (!enabled) {
+          Serial.println("MQTT desativado. Não tentando reconectar.");
+          return false;
+        }
+        if (client.connected()) {
+          Serial.println("MQTT já está conectado.");
+          return true;
+        }
+    
+        unsigned long now = millis();
+        const unsigned long RECONNECT_INTERVAL = hasConnectedBefore ? (300000UL) : 5000;
+        //Serial.println("Verificando intervalo de reconexão: now=" + String(now) + ", lastAttempt=" + String(lastReconnectAttempt) + ", interval=" + String(RECONNECT_INTERVAL));
+    
+        if (now - lastReconnectAttempt < RECONNECT_INTERVAL) {
+          Serial.println("Aguardando intervalo de reconexão. Próxima tentativa em " + String((RECONNECT_INTERVAL - (now - lastReconnectAttempt)) / 1000) + " segundos.");
+          return false;
+        }
+    
+        lastReconnectAttempt = now;
+        Serial.println("Tentando reconectar ao MQTT... (hasConnectedBefore=" + String(hasConnectedBefore) + ")");
+        if (client.connect(hostnameSubtopic.c_str(), user.c_str(), password.c_str())) {
+          Serial.println("MQTT reconectado com sucesso! Sub-tópico: " + hostnameSubtopic);
+          client.subscribe(topicSpraySet.c_str());
+          client.subscribe(topicNtpSetEnabled.c_str());
+          client.subscribe(topicScheduleSetEnabled.c_str());
+          client.subscribe(topicScheduleSetInterval.c_str());
+          client.subscribe(topicScheduleSetStartTime.c_str());
+          client.subscribe(topicScheduleSetEndTime.c_str());
+          hasConnectedBefore = true;
+          return true;
+        } else {
+          Serial.println("Tentativa de reconexão ao MQTT falhou. Estado: " + String(client.state()));
+          if (!hasConnectedBefore && initialConnectAttempts >= 5) {
+            Serial.println("Falha nas 5 tentativas iniciais. Desativando MQTT.");
+            enabled = false;
+            saveConfig();
+          }
+          return false;
+        }
       }
-    } else if (vTopic == topicScheduleSetEnabled) {
-      bool newEnabled = (message == "true");
-      if (newEnabled && !ntp->isNtpActive()) {
-        Serial.println("Erro: NTP não está ativo. Agendamento não pode ser ativado.");
-        publish(topicScheduleEnabled.c_str(), "false");
-      } else if (newEnabled != schedule->enabled) {
-        schedule->enabled = newEnabled;
+    
+      void loop(SprayController& sprayCtrl) {
+        if (!enabled) {
+          Serial.println("MQTT desativado. Pulando loop.");
+          return;
+        }
+    
+        if (!client.connected()) {
+          Serial.println("MQTT desconectado. Chamando reconnect...");
+          reconnect();
+        } else {
+          client.loop();
+        }
+      
+        static unsigned long lastPeriodicPublish = 0;
+        static unsigned long lastEventPublish = 0;
+        unsigned long now = millis();
+      
+        if (now - lastPeriodicPublish >= 60000) {
+          lastPeriodicPublish = now;
+          Serial.println("Publicação periódica de todos os tópicos MQTT");
+          publish(topicContador.c_str(), String(sprayCtrl.getSprayCount()));
+          lastSprayCount = sprayCtrl.getSprayCount();
+          publish(topicNtpStatus.c_str(), ntp->isNtpActive() ? "true" : "false");
+          publish(topicUltimaAtivacao.c_str(), sprayCtrl.getSprayTimestamp());
+          lastTimestamp = sprayCtrl.getSprayTimestamp();
+          publishScheduleStatus();
+          publish(topicSpraySet.c_str(), sprayMqttEnabled ? "true" : "false");
+        }
+      
+        if (now - lastEventPublish >= 500) {
+          lastEventPublish = now;
+          int currentCount = sprayCtrl.getSprayCount();
+          if (currentCount != lastSprayCount) {
+            publish(topicContador.c_str(), String(currentCount));
+            lastSprayCount = currentCount;
+          }
+          String currentTimestamp = sprayCtrl.getSprayTimestamp();
+          if (currentTimestamp != lastTimestamp) {
+            publish(topicUltimaAtivacao.c_str(), currentTimestamp);
+            lastTimestamp = currentTimestamp;
+          }
+          bool currentRelayState = sprayCtrl.isRelayActive();
+          if (lastRelayState && !currentRelayState) {
+            sprayMqttEnabled = false;
+            publish(topicSpraySet.c_str(), "false");
+            Serial.println("Controle do spray via MQTT desativado após ativação");
+          }
+          lastRelayState = currentRelayState;
+        }
+      }
+    
+      void callback(char* topic, byte* payload, unsigned int length, SprayController& sprayCtrl, ESP8266WebServer& server) {
+        String message = String((char*)payload).substring(0, length);
+        String vTopic = topic;
+        Serial.println("Mensagem recebida em " + vTopic + ": " + message);
+    
+        if (vTopic == topicSpraySet) {
+          bool newState = (message == "true");
+          if (newState && !sprayMqttEnabled) {
+            sprayMqttEnabled = true;
+            sprayCtrl.shortPress();
+            publish(topicSpraySet.c_str(), "true");
+            Serial.println("Spray ativado via MQTT");
+          } else if (!newState && sprayMqttEnabled) {
+            sprayMqttEnabled = false;
+            publish(topicSpraySet.c_str(), "false");
+            Serial.println("Spray desativado via MQTT");
+          }
+        } else if (vTopic == topicNtpSetEnabled) {
+          String newState = (message == "true") ? "1" : "0";
+          if (newState != ntp->getNtpEnabled()) {
+            publish(topicNtpStatus.c_str(), ntp->isNtpActive() ? "true" : "false");
+            ntp->setNtpEnabled(newState);
+          }
+        } else if (vTopic == topicScheduleSetEnabled) {
+          bool newEnabled = (message == "true");
+          if (newEnabled && !ntp->isNtpActive()) {
+            Serial.println("Erro: NTP não está ativo. Agendamento não pode ser ativado.");
+            publish(topicScheduleEnabled.c_str(), "false");
+          } else if (newEnabled != schedule->enabled) {
+            schedule->enabled = newEnabled;
+            publish(topicScheduleEnabled.c_str(), schedule->enabled ? "true" : "false");
+            Serial.println("Agendamento " + String(schedule->enabled ? "ativado" : "desativado") + " via MQTT");
+          }
+        } else if (vTopic == topicScheduleSetInterval) {
+          int newInterval = message.toInt();
+          if (newInterval > 0 && newInterval != schedule->interval) {
+            schedule->interval = newInterval;
+            publish(topicScheduleInterval.c_str(), String(schedule->interval));
+            Serial.println("Intervalo do agendamento atualizado para " + String(schedule->interval) + " via MQTT");
+          }
+        } else if (vTopic == topicScheduleSetStartTime) {
+          if (message.length() == 5 && message.indexOf(':') == 2 && message != schedule->startTime) {
+            schedule->startTime = message;
+            publish(topicScheduleStartTime.c_str(), schedule->startTime);
+            Serial.println("Hora de início do agendamento atualizada para " + schedule->startTime + " via MQTT");
+          }
+        } else if (vTopic == topicScheduleSetEndTime) {
+          if (message.length() == 5 && message.indexOf(':') == 2 && message != schedule->endTime) {
+            schedule->endTime = message;
+            publish(topicScheduleEndTime.c_str(), schedule->endTime);
+            Serial.println("Hora de fim do agendamento atualizada para " + schedule->endTime + " via MQTT");
+          }
+        }
+      }
+    
+      void publishScheduleStatus() {
         publish(topicScheduleEnabled.c_str(), schedule->enabled ? "true" : "false");
-        Serial.println("Agendamento " + String(schedule->enabled ? "ativado" : "desativado") + " via MQTT");
-      }
-    } else if (vTopic == topicScheduleSetInterval) {
-      int newInterval = message.toInt();
-      if (newInterval > 0 && newInterval != schedule->interval) {
-        schedule->interval = newInterval;
         publish(topicScheduleInterval.c_str(), String(schedule->interval));
-        Serial.println("Intervalo do agendamento atualizado para " + String(schedule->interval) + " via MQTT");
-      }
-    } else if (vTopic == topicScheduleSetStartTime) {
-      if (message.length() == 5 && message.indexOf(':') == 2 && message != schedule->startTime) {
-        schedule->startTime = message;
         publish(topicScheduleStartTime.c_str(), schedule->startTime);
-        Serial.println("Hora de início do agendamento atualizada para " + schedule->startTime + " via MQTT");
-      }
-    } else if (vTopic == topicScheduleSetEndTime) {
-      if (message.length() == 5 && message.indexOf(':') == 2 && message != schedule->endTime) {
-        schedule->endTime = message;
         publish(topicScheduleEndTime.c_str(), schedule->endTime);
-        Serial.println("Hora de fim do agendamento atualizada para " + schedule->endTime + " via MQTT");
       }
-    }
-  }
-
-  void publishScheduleStatus() {
-    publish(topicScheduleEnabled.c_str(), schedule->enabled ? "true" : "false");
-    publish(topicScheduleInterval.c_str(), String(schedule->interval));
-    publish(topicScheduleStartTime.c_str(), schedule->startTime);
-    publish(topicScheduleEndTime.c_str(), schedule->endTime);
-  }
-
-private:
-  void updateTopics() {
-    topicContador = topic + hostnameSubtopic + "/contador";
-    topicNtpStatus = topic + hostnameSubtopic + "/ntp/status";
-    topicUltimaAtivacao = topic + hostnameSubtopic + "/ultima_ativacao_spray";
-    topicScheduleEnabled = topic + hostnameSubtopic + "/schedule/enabled";
-    topicScheduleInterval = topic + hostnameSubtopic + "/schedule/interval";
-    topicScheduleStartTime = topic + hostnameSubtopic + "/schedule/startTime";
-    topicScheduleEndTime = topic + hostnameSubtopic + "/schedule/endTime";
-    topicSpraySet = topic + hostnameSubtopic + "/spray/set";
-    topicNtpSetEnabled = topic + hostnameSubtopic + "/ntp/set/enabled";
-    topicScheduleSetEnabled = topic + hostnameSubtopic + "/schedule/set/enabled";
-    topicScheduleSetInterval = topic + hostnameSubtopic + "/schedule/set/interval";
-    topicScheduleSetStartTime = topic + hostnameSubtopic + "/schedule/set/startTime";
-    topicScheduleSetEndTime = topic + hostnameSubtopic + "/schedule/set/endTime";
-  }
-};
-
+    
+    private:
+      void updateTopics() {
+        topicContador = topic + hostnameSubtopic + "/contador";
+        topicNtpStatus = topic + hostnameSubtopic + "/ntp/status";
+        topicUltimaAtivacao = topic + hostnameSubtopic + "/ultima_ativacao_spray";
+        topicScheduleEnabled = topic + hostnameSubtopic + "/schedule/enabled";
+        topicScheduleInterval = topic + hostnameSubtopic + "/schedule/interval";
+        topicScheduleStartTime = topic + hostnameSubtopic + "/schedule/startTime";
+        topicScheduleEndTime = topic + hostnameSubtopic + "/schedule/endTime";
+        topicSpraySet = topic + hostnameSubtopic + "/spray/set";
+        topicNtpSetEnabled = topic + hostnameSubtopic + "/ntp/set/enabled";
+        topicScheduleSetEnabled = topic + hostnameSubtopic + "/schedule/set/enabled";
+        topicScheduleSetInterval = topic + hostnameSubtopic + "/schedule/set/interval";
+        topicScheduleSetStartTime = topic + hostnameSubtopic + "/schedule/set/startTime";
+        topicScheduleSetEndTime = topic + hostnameSubtopic + "/schedule/set/endTime";
+      }
+    };
+    
 class ScheduleManager {
 private:
   ScheduleConfig schedule = {false, 10, "00:00", "23:59"};
@@ -1163,6 +1169,8 @@ class FreshPulseServer {
       // Atualiza o estado do LED com base nas condições atuais
       led.updateState(WiFi.status() == WL_CONNECTED, ntp.isNtpActive(), schedule.getSchedule().enabled);
       led.manage();
+
+
 
     }
   
